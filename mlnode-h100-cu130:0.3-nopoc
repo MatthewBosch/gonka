@@ -1,0 +1,75 @@
+# mlnode-h100-cu130:0.3 (缺 vllm/poc/ 的版本)
+# 合并了 v0.1 + v0.2 + v0.3 三阶段,build 完就是缺 poc/ 的 image
+
+FROM ghcr.io/kaitakuai/mlnode-full:0.2.12-vllm0.19.0-h100-k1
+
+SHELL ["/bin/bash", "-lc"]
+
+# === STAGE 1 (原 v0.1): cu130 + vLLM 0.20 + FA4 ===
+RUN apt-get update && \
+    (apt-get install -y --no-install-recommends cuda-toolkit-13-0 || \
+     apt-get install -y --no-install-recommends cuda-toolkit-12-9) && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN source /app/packages/api/.venv/bin/activate && \
+    pip install --no-cache-dir --break-system-packages \
+        torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 \
+        --index-url https://download.pytorch.org/whl/cu130 && \
+    pip install --no-cache-dir --break-system-packages vllm==0.20.0 && \
+    pip install --no-cache-dir --break-system-packages \
+        --index-url https://flashinfer.ai/whl/cu130 \
+        --extra-index-url https://pypi.org/simple \
+        flashinfer-python==0.6.8.post1 \
+        flashinfer-cubin==0.6.8.post1 \
+        flashinfer-jit-cache==0.6.8.post1+cu130 && \
+    pip install --no-cache-dir --break-system-packages \
+        nvidia-cutlass-dsl==4.4.2 \
+        nvidia-cutlass-dsl-libs-base==4.4.2
+
+COPY watcher.py /app/packages/api/src/api/watcher.py
+
+# === STAGE 2 (原 v0.2): ContentTypeInjector (DAPI 422 修复) ===
+COPY proxy_patched.py /app/packages/api/src/api/proxy.py
+COPY app_patched.py /app/packages/api/src/api/app.py
+
+RUN source /app/packages/api/.venv/bin/activate && \
+    python3 -c "from api.proxy import ContentTypeInjector; print('ContentTypeInjector import OK')"
+
+RUN grep -q "add_middleware(ContentTypeInjector)" /app/packages/api/src/api/app.py && \
+    echo "middleware register check OK"
+
+# === STAGE 3 (原 v0.3): 系统 Python 也装 vLLM 0.20(这步会覆盖 vllm/poc/) ===
+# 关键: --force-reinstall 干掉 vllm/poc/,所以最终镜像没这个目录
+RUN /usr/bin/python3.12 -m pip install --no-cache-dir --break-system-packages \
+        --upgrade --force-reinstall \
+        torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 \
+        --index-url https://download.pytorch.org/whl/cu130
+
+RUN /usr/bin/python3.12 -m pip install --no-cache-dir --break-system-packages \
+        --upgrade --force-reinstall vllm==0.20.0
+
+RUN /usr/bin/python3.12 -m pip install --no-cache-dir --break-system-packages \
+        --upgrade --force-reinstall \
+        --index-url https://flashinfer.ai/whl/cu130 \
+        --extra-index-url https://pypi.org/simple \
+        flashinfer-python==0.6.8.post1 \
+        flashinfer-cubin==0.6.8.post1 \
+        flashinfer-jit-cache==0.6.8.post1+cu130
+
+RUN /usr/bin/python3.12 -m pip install --no-cache-dir --break-system-packages \
+        nvidia-cutlass-dsl==4.4.2 \
+        nvidia-cutlass-dsl-libs-base==4.4.2
+
+# 清 .pyc
+RUN find /usr/local/lib/python3.12 -name "*.pyc" -delete 2>/dev/null || true && \
+    find /usr/local/lib/python3.12 -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true && \
+    find /app/packages -name "*.pyc" -delete 2>/dev/null || true && \
+    find /app/packages -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# 自检 (这里只验证 vLLM/FA4 就位,**不验证 poc/**,所以 build 成功 = 镜像缺 poc/)
+RUN /usr/bin/python3.12 -c "import vllm; print('vLLM:', vllm.__version__)" && \
+    /usr/bin/python3.12 -c "import torch; print('torch:', torch.__version__)" && \
+    /usr/bin/python3.12 -c "import flashinfer; print('flashinfer:', flashinfer.__version__)" && \
+    /usr/bin/python3.12 -c "import cutlass; print('cutlass OK')" && \
+    /usr/bin/python3.12 -c "from vllm.vllm_flash_attn.cute import cache_utils; print('cute OK')" && \
+    /usr/bin/python3.12 -c "import os; assert not os.path.exists('/usr/local/lib/python3.12/dist-packages/vllm/poc'), 'poc/ 应该不存在'; print('confirmed: vllm/poc/ MISSING')"
