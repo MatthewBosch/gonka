@@ -12,6 +12,26 @@ B=/root/gonka-backup
 echo "=== [1] docker stop node api ==="
 docker stop node api 2>/dev/null || echo "  (容器不存在/已停, 继续)"
 
+# ============ [1.5] payload 恢复 (有 /root/inference-backup 才做, 没有跳过) ============
+echo ""
+echo "=== [1.5] payload 恢复检查 ==="
+if [ -d /root/inference-backup ]; then
+  CNT=$(ls /root/inference-backup/ 2>/dev/null | wc -l)
+  SZ=$(du -sh /root/inference-backup/ 2>/dev/null | cut -f1)
+  echo "  发现 /root/inference-backup ($SZ, 顶层 $CNT 项)"
+  read -p ">>> 回车开始复制 payload 到 .dapi/data/inference/ (Ctrl+C 取消): " _
+  mkdir -p /root/gonka/deploy/join/.dapi/data/inference/
+  cp -a /root/inference-backup/. /root/gonka/deploy/join/.dapi/data/inference/
+  echo ""
+  echo "  --- payload 恢复完成 ---"
+  du -sh /root/gonka/deploy/join/.dapi/data/inference/
+  for EP in $(ls /root/gonka/deploy/join/.dapi/data/inference/ | sort -n); do
+    echo "  epoch $EP: $(ls /root/gonka/deploy/join/.dapi/data/inference/$EP/ 2>/dev/null | wc -l) 文件"
+  done
+else
+  echo "  /root/inference-backup 不存在, 跳过 payload 恢复"
+fi
+
 # ============ [2] 检查备份 + 提取 KEY_NAME ============
 echo ""
 echo "=== [2] 检查备份 $B ==="
@@ -126,7 +146,7 @@ docker compose run --rm --no-deps -it api /bin/sh
 echo ""
 echo "=== [8] grant-ml-ops-permissions (冷钱包 -> 热钱包授权) ==="
 echo "  自动获取热钱包地址 (warm keyring: $WARM_NAME) ..."
-WARM_ADDR=$(echo "$KEYRING_PASSWORD" | ./inferenced keys show "$WARM_NAME" -a --keyring-backend file --keyring-dir /root/gonka/deploy/join/.inference 2>/dev/null | tr -d ' \n')
+WARM_ADDR=$(echo "$KEYRING_PASSWORD" | ./inferenced keys show "$WARM_NAME" -a --keyring-backend file --keyring-dir /root/gonka/deploy/join/.inference 2>/dev/null | tr -d ' \n' || true)
 case "$WARM_ADDR" in
   gonka1*) echo "  获取成功: $WARM_ADDR" ;;
   *)
