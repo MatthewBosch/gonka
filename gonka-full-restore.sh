@@ -21,7 +21,12 @@ if [ -d /root/inference-backup ]; then
   echo "  发现 /root/inference-backup ($SZ, 顶层 $CNT 项)"
   read -p ">>> 回车开始复制 payload 到 .dapi/data/inference/ (Ctrl+C 取消): " _
   mkdir -p /root/gonka/deploy/join/.dapi/data/inference/
-  cp -a /root/inference-backup/. /root/gonka/deploy/join/.dapi/data/inference/
+  # rsync 增量: 第一次全量, 重复跑只补缺的/变的, 不重抄 48G
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a /root/inference-backup/ /root/gonka/deploy/join/.dapi/data/inference/
+  else
+    cp -a /root/inference-backup/. /root/gonka/deploy/join/.dapi/data/inference/
+  fi
   echo ""
   echo "  --- payload 恢复完成 ---"
   du -sh /root/gonka/deploy/join/.dapi/data/inference/
